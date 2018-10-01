@@ -2,17 +2,27 @@ import os,sys
 import math as m
 import random
 import string
+import numpy as np
+import time
 
 #Key Width equal to 1 key
 keyWidth = 1.0
 #Key coordinate for a 6 rows by 5 column keyboard
 cord = [[(x + keyWidth/2.0,y + keyWidth/2.0) for x in range(5)] for y in range(6)]
+T_INIT = 100
+DELTA = 0.98
+T_FIN = 1e-8
+def copy_layout(layout):
+    copied_layout = {}
+    for k in layout:
+        copied_layout[k] = (layout[k][0], layout[k][1])
+    return copied_layout
 
 
 def get_random_layout():
     # Call this function to a a randomized layout.
     # A layout is dictionary of key symbols(a to z) to it's (row, column) index
-    cord_shuffle = [(x ,y) for x in range(6) for y in range(5)]
+    cord_shuffle = [(x, y) for x in range(6) for y in range(5)]
     random.shuffle(cord_shuffle)
 
     layout={}
@@ -34,41 +44,120 @@ def makeDigramTable(data_path):
     # Make a Digram Table , which is a dictionary with key format (letter_i,letter_j) to it's Pij
     # You could safely ignore words that have only 1 character when constructing this dictionary
     
-#    fp = open(data_path)
-#    content=fp.read()
-#    fp.close()
 
-    tbl={}
-
+    fp = open(data_path, 'r')
+    content = fp.read()
+    fp.close()
+    freq_sum = 0
+    tbl = {}
+    for line in content.split('\n'): 
+        word, freq, p = line.strip().split('\t')
+        if len(word) == 1:
+            continue
+        freq = int(freq)        
+        for i in range(0, len(word)-1):
+            freq_sum += freq
+            tbl[(word[i], word[i+1])] = tbl.get((word[i], word[i+1]), 0) + freq
+    for k in tbl.keys():
+        tbl[k] = tbl[k]*1.0 / freq_sum
+    # print tbl
     return tbl
 
 def FittsLaw(W,D):
     #implement the Fitt's Law based on the given arguments and constant
     a = 0.083
     b = 0.127
-    return 
+    return a+b*m.log(D/W+1, 2)
 
-
-def computeAMT(layout, digram_table):
+def computeAMT(layout, digram_table, exchange_pair, previous_cost):
     # Compute the average movement time
-    MT=0
+    if exchange_pair is None:
+        MT=0
+        keys = layout.keys()
+        for i in range(len(keys)):
+            for j in range(i+1, len(keys)):
+                c1 = keys[i]
+                c2 = keys[j]
+                if c1 in '1234' or c2 in '1234':
+                    continue
+                x1, y1 = layout[c1]
+                x2, y2 = layout[c2]
+                d = m.sqrt((x1-x2)**2+(y1-y2)**2)
+                MT += digram_table.get((c1, c2), 0)*FittsLaw(keyWidth, d)
+                MT += digram_table.get((c2, c1), 0)*FittsLaw(keyWidth, d)
+    else:
+        MT = previous_cost
+        keys =layout.keys()
+        c1, c2 = exchange_pair
+        # for cc in exchange_pair:
+        for c in keys:
+            if c in '1234' or c == c1 or c == c2:
+                continue
+            x1, y1 = layout[c1]
+            x2, y2 = layout[c2]
+            xc, yc = layout[c]
+            d1 = m.sqrt((x1-xc)**2+(y1-yc)**2)
+            d2 = m.sqrt((x2-xc)**2+(y2-yc)**2)
+            f1 = FittsLaw(keyWidth, d1)
+            f2 = FittsLaw(keyWidth, d2)
 
+            MT += digram_table.get((c, c1), 0)*(f2-f1)
+            MT += digram_table.get((c1, c), 0)*(f2-f1)
+            MT += digram_table.get((c, c2), 0)*(f1-f2)
+            MT += digram_table.get((c2, c), 0)*(f1-f2)
+
+            # MT -= digram_table.get((c, c1), 0)*f1
+            # MT -= digram_table.get((c1, c), 0)*f1
+
+            # MT += digram_table.get((c, c2), 0)*f1
+            # MT += digram_table.get((c2, c), 0)*f1
+
+            # MT -= digram_table.get((c, c2), 0)*f2
+            # MT -= digram_table.get((c2, c), 0)*f2
+
+            # MT += digram_table.get((c, c1), 0)*f2
+            # MT += digram_table.get((c1, c), 0)*f2
     return MT
 
 def SA(num_iter, num_random_start, tbl):
     # Do the SA with num_iter iterations, you can random start by num_random_start times
     # the tbl arguments were the digram table
-
-    final_result= ({},0.0)
-#    while r < num_random_start:
-#        starting_state = get_random_layout()
-#        k=0
-
-#        cost = computeAMT(starting_state,tbl)
-#        while k<num_iter:
-            #Do something
-
-
+    r = 0
+    final_result= ({},99999999)
+    while r < num_random_start:
+        layout = get_random_layout()
+        k=0
+        cost = computeAMT(layout,tbl, None, None)
+        # print cost
+        T = T_INIT
+        # while T>=T_FIN: 
+        while k<num_iter:
+            keys =  layout.keys()
+            # c1 = '1'
+            # c2 = '2'
+            # while c1 != c2 and (c1 not in '1234') and (c2 not in '1234'):
+            #     c1 = random.choice(keys)
+            #     c2 = random.choice(keys)
+            c1, c2 = random.sample(string.ascii_lowercase, 2)
+            new_cost = computeAMT(layout, tbl, (c1, c2), cost)
+            # Accept layout
+            if new_cost <= cost:
+                layout[c1], layout[c2] = layout[c2], layout[c1]
+                cost = new_cost
+                # Record best layout
+                if cost < final_result[1]:
+                    final_result = (copy_layout(layout), cost)
+                    print (cost)
+            else:
+                # print new_cost, cost, (new_cost-cost)/T
+                # Accept layout by probability
+                if np.exp((cost - new_cost)/T) > random.random():
+                    layout[c1], layout[c2] = layout[c2], layout[c1]
+                    cost = new_cost
+            k += 1
+            T *= DELTA
+        r += 1
+        print 'Random Start Round', r
     #--------you should return a tuple of (optimal_layout,optimal_MT)----
     return final_result
 
@@ -86,7 +175,7 @@ def printLayout(layout):
         print row
 
 if __name__ == '__main__':
-
+    st = time.time()
     if len(sys.argv)!=4:
         print "usage: hw1.py [num_SA_iteration] [num_SA_random_start] [dataset_path]"
         exit(0)
@@ -107,6 +196,7 @@ if __name__ == '__main__':
     result, cost = SA(k,rs,tbl)
     print "Optimal MT:", cost
     printLayout(result)
+    print time.time() - st
 
     
 
